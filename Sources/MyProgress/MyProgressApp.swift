@@ -4,6 +4,9 @@ import AppKit
 @main
 @MainActor
 struct MyProgressApp: App {
+    @AppStorage("myprogress.showMenuBar") private var showMenuBar = true
+    @AppStorage("myprogress.appearance") private var appearance = "dark"
+    private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
     @StateObject private var tracker: ActivityTracker
     @StateObject private var journal: JournalStore
     init() {
@@ -15,11 +18,12 @@ struct MyProgressApp: App {
         _journal = StateObject(wrappedValue: JournalStore(tracker: tracker))
     }
     var body: some Scene {
-        WindowGroup {
+        Window("My Progress", id: "main") {
             ContentView()
                 .environmentObject(tracker)
                 .environmentObject(journal)
-                .frame(minWidth: 960, minHeight: 650)
+                .frame(minWidth: 1060, minHeight: 720)
+                .preferredColorScheme(colorScheme)
                 .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
         }
         .commands {
@@ -29,6 +33,9 @@ struct MyProgressApp: App {
                 Button("Експортувати резервну копію…") { tracker.exportData() }
             }
         }
-        Settings { TrackingSettingsView().environmentObject(tracker) }
+        MenuBarExtra("My Progress", systemImage: "chart.line.uptrend.xyaxis", isInserted: $showMenuBar) {
+            MenuBarControls().environmentObject(tracker)
+        }
+        Settings { TrackingSettingsView().environmentObject(tracker).preferredColorScheme(colorScheme) }
     }
 }

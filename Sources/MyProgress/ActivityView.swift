@@ -9,8 +9,9 @@ struct ActivityView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Label(category.title, systemImage: category.symbol).font(.largeTitle.bold())
-                ActivityControls(category: category)
+                PageHeading(title: category.title, subtitle: "Фокус, результати та історія твого розвитку", symbol: category.symbol)
+                Panel { ActivityControls(category: category) }
+                OutcomeSummary(category: category)
                 HStack {
                     MetricView(title: "Сьогодні", value: TimeText.short(tracker.stats.today(category: category)))
                     MetricView(title: "Загалом", value: TimeText.short(tracker.stats.total(category: category)))
@@ -57,6 +58,7 @@ struct ActivityControls: View {
     let category: ActivityCategory
     @EnvironmentObject private var tracker: ActivityTracker
     @State private var selectedTask: UUID?
+    @State private var passive = false
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             let elapsed = tracker.activeSession.flatMap { $0.category == category ? $0.duration : nil } ?? 0
@@ -70,17 +72,22 @@ struct ActivityControls: View {
                 }
             }.frame(maxWidth: 420)
                 .disabled(tracker.manualCategory == category)
+            if category == .english || category == .learning {
+                Toggle("Перегляд фільму / читання — без пауз за бездіяльністю", isOn: $passive)
+                    .disabled(tracker.manualCategory == category)
+                Text("Сон призупинить таймер. Завершіть сесію, коли закінчите перегляд.").font(.caption).foregroundStyle(.secondary)
+            }
             HStack {
                 Button(tracker.manualCategory == category ? "Зупинити" : "Почати сесію") {
                     if tracker.manualCategory == category { tracker.stopManual() }
-                    else { tracker.start(category, taskID: selectedTask) }
+                    else { tracker.start(category, taskID: selectedTask, passive: passive) }
                 }.buttonStyle(.borderedProminent)
                 if tracker.manualCategory == category && tracker.activeSession == nil {
                     Text("Таймер відновиться після активності.").font(.caption)
                 }
             }
         }
-        .onChange(of: category) { _, _ in selectedTask = nil }
+        .onChange(of: category) { _, _ in selectedTask = nil; passive = false }
         .onChange(of: tracker.document.tasks) { _, tasks in
             if !tasks.contains(where: { $0.id == selectedTask && !$0.isCompleted }) { selectedTask = nil }
         }

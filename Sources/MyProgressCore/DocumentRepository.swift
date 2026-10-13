@@ -19,6 +19,17 @@ public struct DocumentRepository {
         try validate(document)
         return document
     }
+    /// Called once before an app writes the new schema, preserving the original bytes.
+    @discardableResult
+    public func backupVersionOneIfNeeded() throws -> URL? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let bytes = try Data(contentsOf: url)
+        let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        guard object?["version"] as? Int == 1 else { return nil }
+        let backup = url.deletingLastPathComponent().appendingPathComponent("backup-before-results-\(UUID().uuidString).json")
+        try bytes.write(to: backup, options: .atomic)
+        return backup
+    }
     public func save(_ document: ProgressDocument) throws {
         try validate(document)
         let data = try JSONEncoder().encode(document)
@@ -26,11 +37,21 @@ public struct DocumentRepository {
         try data.write(to: url, options: .atomic)
     }
     public func validate(_ document: ProgressDocument) throws {
-        guard document.version == 1 else { throw DocumentError.unsupportedVersion(document.version) }
+        guard document.version == 2 else { throw DocumentError.unsupportedVersion(document.version) }
         func unique<T: Hashable>(_ ids: [T]) -> Bool { Set(ids).count == ids.count }
         guard unique(document.sessions.map(\.id)), unique(document.tasks.map(\.id)),
               unique(document.journal.map(\.id)), unique(document.achievements.map(\.id)),
               unique(document.goals.map(\.category)), unique(document.legacyTotals.map(\.category)),
+              unique(document.outcomes.map(\.id)), unique(document.outcomes.compactMap(\.reference)),
+              unique(document.outcomeGoals.map(\.id)), unique(document.gitTracking.repositories.map(\.id)),
+              unique(document.gitTracking.repositories.map(\.path)),
+              document.outcomes.allSatisfy({
+                  (1...1_000_000).contains($0.quantity) && !$0.metric.isDerived && $0.metric.supports($0.category)
+                  && ($0.source == .manual || $0.reference?.isEmpty == false)
+                  && ($0.source != .git || ($0.metric == .commits && $0.quantity == 1 && $0.reference?.hasPrefix("git:") == true))
+              }),
+              document.outcomeGoals.allSatisfy({ (1...1_000_000).contains($0.target) && $0.metric.supports($0.category) }),
+              document.gitTracking.repositories.allSatisfy({ $0.path.hasPrefix("/") }),
               unique(document.settings.rules.map(\.id)),
               unique(document.settings.rules.map(\.bundleIdentifier)),
               document.sessions.allSatisfy({ $0.endedAt >= $0.startedAt && $0.duration.isFinite }),

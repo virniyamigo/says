@@ -3,7 +3,7 @@ import Charts
 import MyProgressCore
 
 private enum Destination: Hashable {
-    case dashboard, activity(ActivityCategory), tasks, statistics, achievements, settings
+    case dashboard, activity(ActivityCategory), tasks, outcomes, statistics, achievements, settings
 }
 
 struct ContentView: View {
@@ -20,12 +20,14 @@ struct ContentView: View {
                 }
                 Section("Результати") {
                     Label("Задачі", systemImage: "checklist").tag(Destination.tasks)
+                    Label("Результати", systemImage: "target").tag(Destination.outcomes)
                     Label("Статистика", systemImage: "chart.bar").tag(Destination.statistics)
                     Label("Досягнення", systemImage: "trophy").tag(Destination.achievements)
                     Label("Налаштування", systemImage: "gear").tag(Destination.settings)
                 }
             }
             .navigationTitle("My Progress")
+            .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 280)
             .safeAreaInset(edge: .bottom) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(tracker.status).font(.caption)
@@ -54,14 +56,15 @@ struct ContentView: View {
                             PsychologyView()
                         } else { ActivityView(category: category) }
                     case .tasks: TasksView()
+                    case .outcomes: OutcomesView()
                     case .statistics: StatisticsView()
                     case .achievements: AchievementsView()
                     case .settings: TrackingSettingsView()
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
                     .disabled(!tracker.writable)
-            }
-        }
+            }.background(AppCanvas())
+        }.tint(.cyan)
     }
 }
 
@@ -70,12 +73,21 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Мій прогрес").font(.largeTitle.bold())
-                HStack(spacing: 30) {
-                    MetricView(title: "Сьогодні", value: TimeText.short(tracker.stats.today()))
-                    MetricView(title: "За весь час", value: TimeText.short(tracker.stats.total()))
-                    MetricView(title: "Серія днів", value: "\(tracker.stats.streak())")
-                    MetricView(title: "Виконані задачі", value: "\(tracker.document.tasks.filter(\.isCompleted).count)")
+                PageHeading(title: "Твій прогрес", subtitle: Date().formatted(.dateTime.weekday(.wide).day().month(.wide)), symbol: "sparkles")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 16)], spacing: 16) {
+                    StatCard(title: "Фокус сьогодні", value: TimeText.short(tracker.stats.today()), symbol: "timer")
+                    StatCard(title: "Коміти цього тижня", value: "\(tracker.outcomeStats.quantity(metric: .commits, in: Calendar.current.dateInterval(of: .weekOfYear, for: Date())))", symbol: "arrow.triangle.branch", tint: .purple)
+                    StatCard(title: "Виконані задачі", value: "\(tracker.document.tasks.filter(\.isCompleted).count)", symbol: "checkmark.circle", tint: .green)
+                    StatCard(title: "Серія активних днів", value: "\(tracker.stats.streak())", symbol: "flame", tint: .orange)
+                }
+                HStack {
+                    Text("Цілі за результатами").font(.title2.bold())
+                    Spacer()
+                    Text("Автоматичний прогрес").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(tracker.document.outcomeGoals) { OutcomeGoalCard(goal: $0) }
+                if tracker.document.outcomeGoals.isEmpty {
+                    EmptyPanel(title: "Визнач наступний крок", detail: "Додай ціль у розділі «Результати».", symbol: "target")
                 }
                 Text("Щоденні цілі").font(.title2.bold())
                 ForEach(ActivityCategory.allCases) { category in
@@ -88,7 +100,7 @@ struct DashboardView: View {
                     }
                 }
                 Text("Останні 7 днів").font(.title2.bold())
-                DailyChart(days: tracker.stats.days())
+                Panel { DailyChart(days: tracker.stats.days()) }
                 Text("Найближчі задачі").font(.title2.bold())
                 let pending = tracker.document.tasks.filter { !$0.isCompleted }.sorted {
                     ($0.dueAt ?? .distantFuture) < ($1.dueAt ?? .distantFuture)
@@ -120,7 +132,7 @@ struct ProgressRow: View {
     let time: TimeInterval
     var body: some View {
         HStack { Text(title).font(.headline); Spacer(); Text(TimeText.short(time)).foregroundStyle(.secondary) }
-            .padding().background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(16).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 15))
     }
 }
 

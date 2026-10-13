@@ -7,10 +7,23 @@ struct TrackingSettingsView: View {
     @State private var category = ActivityCategory.programming
     @State private var apiKey = ""
     @State private var keyMessage = ""
+    @State private var passive = false
+    @AppStorage("myprogress.showMenuBar") private var showMenuBar = true
+    @AppStorage("myprogress.appearance") private var appearance = "dark"
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Налаштування").font(.largeTitle.bold())
+                PageHeading(title: "Налаштування", subtitle: "Зроби трекінг своїм — від стилю до автоматизації", symbol: "slider.horizontal.3")
+                Picker("Вигляд", selection: $appearance) {
+                    Text("Темний").tag("dark"); Text("Світлий").tag("light"); Text("Як у системі").tag("system")
+                }.pickerStyle(.segmented)
+                Panel {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Toggle("Показувати швидке керування в меню macOS", isOn: $showMenuBar)
+                        LoginSettingsView()
+                    }
+                }
+                GitSettingsPanel()
                 Text("Щоденні цілі").font(.title2.bold())
                 ForEach(ActivityCategory.allCases) { item in
                     Stepper(value: Binding(get: { tracker.document.goals.first { $0.category == item }?.dailyMinutes ?? 30 },
@@ -32,13 +45,23 @@ struct TrackingSettingsView: View {
                     HStack {
                         Text(rule.bundleIdentifier).textSelection(.enabled)
                         Spacer(); Text(rule.category.title)
+                        Toggle("Пауза за бездіяльністю", isOn: Binding(get: { rule.pauseWhenIdle }, set: { tracker.setRuleIdle(rule.id, enabled: $0) }))
+                            .font(.caption).toggleStyle(.checkbox)
                         Button(role: .destructive) { tracker.removeRule(rule.id) } label: { Image(systemName: "trash") }
                     }
                 }
                 HStack {
+                    Picker("Напрям програми", selection: $category) { ForEach(ActivityCategory.allCases) { Text($0.title).tag($0) } }
+                    Toggle("Перегляд / читання без пауз", isOn: $passive)
+                    Button("Вибрати програму…") { tracker.chooseAutomaticApp(category: category, passive: passive) }
+                        .buttonStyle(.borderedProminent)
+                }
+                Text("Виберіть ChatGPT чи свій відеоплеєр і напрям «Англійська». Для фільмів увімкніть режим без пауз; він рахує час, поки вибрана програма активна, а не перевіряє факт відтворення.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
                     TextField("Bundle ID, наприклад com.apple.dt.Xcode", text: $bundleID)
                     Picker("Напрям", selection: $category) { ForEach(ActivityCategory.allCases) { Text($0.title).tag($0) } }
-                    Button("Додати / оновити") { tracker.addRule(bundleID: bundleID, category: category); bundleID = "" }
+                    Button("Додати / оновити") { tracker.addRule(bundleID: bundleID, category: category, pauseWhenIdle: !passive); bundleID = "" }
                         .disabled(bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Text("Активна програма: \(tracker.frontmostBundleID.isEmpty ? "невідома" : tracker.frontmostBundleID)")
@@ -71,6 +94,6 @@ struct TrackingSettingsView: View {
                 Text("Усі записи зберігаються локально. Експорт містить особистий щоденник, але не API-ключ. Перед відновленням створюється резервна копія поточних даних.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(30)
-        }.frame(minWidth: 650, minHeight: 550).disabled(!tracker.writable)
+        }.frame(minWidth: 760, minHeight: 650).background(AppCanvas()).disabled(!tracker.writable)
     }
 }

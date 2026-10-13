@@ -3,6 +3,7 @@ import Combine
 import AppKit
 import CoreGraphics
 import MyProgressCore
+import UniformTypeIdentifiers
 
 /// App-wide replacement for the original per-view timer; survives navigation changes.
 @MainActor
@@ -12,6 +13,12 @@ final class ActivityTracker: ObservableObject {
     @Published private(set) var manualCategory: ActivityCategory?
     @Published private(set) var status = "Трекінг зупинено"
     @Published private(set) var frontmostBundleID = ""
+    @Published private(set) var gitStatus = "Оберіть локальні репозиторії в налаштуваннях"
+    @Published private(set) var gitRefreshing = false
+    @Published private(set) var lastGitSync: Date?
+    @Published private(set) var resultMessage: String?
+    private var lastGitAttempt = Date.distantPast
+    private var manualPassive = false
     private var manualTaskID: UUID?
     private var recorder = SessionRecorder()
     private var timer: Timer?
@@ -26,6 +33,7 @@ final class ActivityTracker: ObservableObject {
         repository = DocumentRepository(url: base.appendingPathComponent("MyProgress/progress-v1.json"))
         do {
             document = try repository.load() ?? DocumentRepository.migrate(defaults: .standard)
+            try repository.backupVersionOneIfNeeded()
             // A restored session ends at its last persisted observation, never at the next launch.
             document.activeSessionID = nil
             document.sessions.removeAll { $0.duration == 0 }
@@ -62,6 +70,7 @@ final class ActivityTracker: ObservableObject {
         if let timer { RunLoop.main.add(timer, forMode: .common) }
     }
 
+    var outcomeStats: OutcomeStatistics { .init(document: document) }
     var stats: ProgressStatistics { .init(document: document) }
     var activeSession: ActivitySession? { document.sessions.first { $0.id == document.activeSessionID } }
     var writable: Bool { !storageUnavailable }
@@ -71,6 +80,7 @@ final class ActivityTracker: ObservableObject {
         var next = document
         change(&next)
         AchievementDefinition.update(&next)
+        guard next != document else { return }
         do {
             try repository.save(next)
             document = next
@@ -87,6 +97,7 @@ final class ActivityTracker: ObservableObject {
         // Never overwrite an unreadable initial file with an empty in-memory document.
         do {
             if let loaded = try repository.load() {
+                try repository.backupVersionOneIfNeeded()
                 document = loaded
                 document.activeSessionID = nil
             } else {
@@ -97,18 +108,18 @@ final class ActivityTracker: ObservableObject {
             recorder = SessionRecorder()
         } catch { storageError = error.localizedDescription }
     }
-    func start(_ category: ActivityCategory, taskID: UUID? = nil) {
+    func start(_ category: ActivityCategory, taskID: UUID? = nil, passive: Bool = false) {
         guard writable else { return }
-        manualCategory = category; manualTaskID = taskID
+        manualCategory = category; manualTaskID = taskID; manualPassive = passive
         sample()
     }
     func stopManual() {
-        manualCategory = nil; manualTaskID = nil
+        manualCategory = nil; manualTaskID = nil; manualPassive = false
         finishSession()
         sample()
     }
     func stopAll() {
-        manualCategory = nil; manualTaskID = nil
+        manualCategory = nil; manualTaskID = nil; manualPassive = false
         finishSession()
     }
     private func finishSession() {
@@ -124,6 +135,7 @@ final class ActivityTracker: ObservableObject {
     private func sample() {
         frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
         guard writable else { return }
+        if document.gitTracking.enabled && Date().timeIntervalSince(lastGitAttempt) >= 60 { refreshGit() }
         // Query ages of actual input types; .null is not an "any user input" event.
         // No event tap is installed and no keystrokes or pointer coordinates are read.
         let inputTypes: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .mouseMoved,
@@ -134,13 +146,15 @@ final class ActivityTracker: ObservableObject {
         }.filter { $0.isFinite && $0 >= 0 }.min() ?? .infinity
         var category: ActivityCategory?
         var source: TrackingSource = .manual
-        if sleeping || idle >= document.settings.idleSeconds {
+        let rule = document.settings.rules.first { $0.bundleIdentifier == frontmostBundleID }
+        let shouldPauseForIdle = manualCategory != nil ? !manualPassive : (rule?.pauseWhenIdle ?? true)
+        if sleeping || (shouldPauseForIdle && idle >= document.settings.idleSeconds) {
             status = "Пауза: бездіяльність або сон"
         } else if let manualCategory {
             category = manualCategory
             status = "Вручну: \(manualCategory.title)"
         } else if document.settings.automaticEnabled,
-                  let rule = document.settings.rules.first(where: { $0.bundleIdentifier == frontmostBundleID }) {
+                  let rule {
             category = rule.category; source = .automatic
             status = "Автоматично: \(rule.category.title)"
         } else {
@@ -186,13 +200,14 @@ final class ActivityTracker: ObservableObject {
         sample()
     }
     func setIdle(_ seconds: TimeInterval) { commit { $0.settings.idleSeconds = seconds } }
-    func addRule(bundleID: String, category: ActivityCategory) {
+    func addRule(bundleID: String, category: ActivityCategory, pauseWhenIdle: Bool = true) {
         let id = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return }
         commit { next in
             if let i = next.settings.rules.firstIndex(where: { $0.bundleIdentifier == id }) {
                 next.settings.rules[i].category = category
-            } else { next.settings.rules.append(.init(bundleIdentifier: id, category: category)) }
+                next.settings.rules[i].pauseWhenIdle = pauseWhenIdle
+            } else { next.settings.rules.append(.init(bundleIdentifier: id, category: category, pauseWhenIdle: pauseWhenIdle)) }
         }
     }
     func removeRule(_ id: UUID) { commit { $0.settings.rules.removeAll { $0.id == id } }; sample() }
@@ -211,6 +226,104 @@ final class ActivityTracker: ObservableObject {
         commit { $0.journal.insert(.init(category: category, text: text), at: 0) }
     }
     func deleteNote(_ id: UUID) { commit { $0.journal.removeAll { $0.id == id } } }
+    func chooseAutomaticApp(category: ActivityCategory, passive: Bool) {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.application]
+        panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let id = Bundle(url: url)?.bundleIdentifier else { return }
+        addRule(bundleID: id, category: category, pauseWhenIdle: !passive)
+        setAutomatic(true)
+    }
+    func setRuleIdle(_ id: UUID, enabled: Bool) {
+        commit { next in
+            if let index = next.settings.rules.firstIndex(where: { $0.id == id }) { next.settings.rules[index].pauseWhenIdle = enabled }
+        }
+    }
+    func addOutcome(category: ActivityCategory, metric: OutcomeMetric, quantity: Int, date: Date, note: String) {
+        guard date <= Date(), metric.supports(category), !metric.isDerived, (1...1_000_000).contains(quantity) else { return }
+        commit { $0.outcomes.append(.init(category: category, metric: metric, quantity: quantity, date: date, note: note)) }
+    }
+    func deleteOutcome(_ id: UUID) {
+        // Git facts remain immutable so a polling scan cannot re-import a deleted fact.
+        commit { $0.outcomes.removeAll { $0.id == id && $0.source != .git } }
+    }
+    func addOutcomeGoal(_ goal: OutcomeGoal) { commit { $0.outcomeGoals.append(goal) } }
+    func deleteOutcomeGoal(_ id: UUID) { commit { $0.outcomeGoals.removeAll { $0.id == id } } }
+    func updateOutcomeGoal(_ goal: OutcomeGoal) {
+        commit { next in
+            if let index = next.outcomeGoals.firstIndex(where: { $0.id == goal.id }) { next.outcomeGoals[index] = goal }
+        }
+    }
+    func importOutcomes(_ records: [OutcomeRecord]) {
+        var count = 0
+        commit { count = OutcomeAutomation.merge(records, into: &$0) }
+        if storageError == nil { resultMessage = "Додано результатів: \(count). Повторні записи пропущено." }
+    }
+    func importCSV() {
+        let panel = NSOpenPanel(); panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { importOutcomes(try OutcomeCSV.read(String(contentsOf: url, encoding: .utf8))) }
+        catch { resultMessage = error.localizedDescription }
+    }
+    func setGitEnabled(_ enabled: Bool) {
+        commit { $0.gitTracking.enabled = enabled }
+        if enabled { refreshGit() }
+    }
+    func setGitTaskCompletion(_ enabled: Bool) { commit { $0.gitTracking.completeReferencedTasks = enabled } }
+    func chooseGitRepository() {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            do {
+                let repo = try await Task.detached { try GitReader.inspect(path: url.path) }.value
+                commit { next in
+                    if !next.gitTracking.repositories.contains(where: { $0.path == repo.path }) { next.gitTracking.repositories.append(repo) }
+                }
+                if document.gitTracking.enabled { refreshGit() }
+            } catch { gitStatus = error.localizedDescription }
+        }
+    }
+    func updateGitAuthor(_ id: UUID, email: String) {
+        commit { next in
+            if let index = next.gitTracking.repositories.firstIndex(where: { $0.id == id }) {
+                next.gitTracking.repositories[index].authorEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        if document.gitTracking.enabled { refreshGit() }
+    }
+    func removeGitRepository(_ id: UUID) { commit { $0.gitTracking.repositories.removeAll { $0.id == id } } }
+    func refreshGit() {
+        guard writable, document.gitTracking.enabled, !gitRefreshing else { return }
+        let repositories = document.gitTracking.repositories
+        guard !repositories.isEmpty else { gitStatus = "Оберіть локальну папку Git-репозиторію"; lastGitAttempt = Date(); return }
+        gitRefreshing = true; lastGitAttempt = Date()
+        Task {
+            let since = Date().addingTimeInterval(-30 * 86400)
+            let results = await Task.detached {
+                repositories.map { repo -> (UUID, Result<[GitCommit], Error>) in
+                    (repo.id, Result { try GitReader.commits(repository: repo, since: since) })
+                }
+            }.value
+            defer { gitRefreshing = false }
+            guard document.gitTracking.enabled else { return }
+            var commits: [GitCommit] = []; var errors: [String] = []
+            for (id, result) in results {
+                guard let original = repositories.first(where: { $0.id == id }),
+                      document.gitTracking.repositories.contains(original) else { continue }
+                switch result {
+                case .success(let values): commits.append(contentsOf: values)
+                case .failure(let error): errors.append(error.localizedDescription)
+                }
+            }
+            var count = 0
+            commit { count = OutcomeAutomation.mergeCommits(commits, into: &$0) }
+            guard writable else { return }
+            lastGitSync = Date()
+            gitStatus = errors.isEmpty ? "Оновлено: +\(count) нових комітів" : "Часткове оновлення: +\(count). " + errors.joined(separator: " ")
+        }
+    }
     func importData() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
@@ -220,7 +333,7 @@ final class ActivityTracker: ObservableObject {
             try repository.validate(candidate)
             let alert = NSAlert()
             alert.messageText = "Замінити поточні дані резервною копією?"
-            alert.informativeText = "Сесій: \(candidate.sessions.count), задач: \(candidate.tasks.count), записів: \(candidate.journal.count). Поточні дані буде збережено в окремій резервній копії."
+            alert.informativeText = "Результатів: \(candidate.outcomes.count). Сесій: \(candidate.sessions.count), задач: \(candidate.tasks.count), записів: \(candidate.journal.count). Поточні дані буде збережено в окремій резервній копії."
             alert.addButton(withTitle: "Відновити"); alert.addButton(withTitle: "Скасувати")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             stopAll()

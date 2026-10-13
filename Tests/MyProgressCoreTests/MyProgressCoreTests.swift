@@ -121,9 +121,9 @@ final class MyProgressCoreTests: XCTestCase {
     func testUnsupportedVersionInvalidDurationAndDuplicateIDsAreRejected() throws {
         let repo = DocumentRepository(url: URL(fileURLWithPath: "/unused"))
         var document = ProgressDocument()
-        document.version = 2
+        document.version = 3
         XCTAssertThrowsError(try repo.validate(document))
-        document.version = 1
+        document.version = 2
         let session = ActivitySession(category: .sport, startedAt: date(11), endedAt: date(10))
         document.sessions = [session]
         XCTAssertThrowsError(try repo.validate(document))

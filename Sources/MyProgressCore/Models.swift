@@ -68,8 +68,17 @@ public struct AutomaticRule: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
     public var bundleIdentifier: String
     public var category: ActivityCategory
-    public init(id: UUID = UUID(), bundleIdentifier: String, category: ActivityCategory) {
-        self.id = id; self.bundleIdentifier = bundleIdentifier; self.category = category
+    public var pauseWhenIdle: Bool
+    public init(id: UUID = UUID(), bundleIdentifier: String, category: ActivityCategory, pauseWhenIdle: Bool = true) {
+        self.id = id; self.bundleIdentifier = bundleIdentifier; self.category = category; self.pauseWhenIdle = pauseWhenIdle
+    }
+    private enum CodingKeys: String, CodingKey { case id, bundleIdentifier, category, pauseWhenIdle }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        bundleIdentifier = try values.decode(String.self, forKey: .bundleIdentifier)
+        category = try values.decode(ActivityCategory.self, forKey: .category)
+        pauseWhenIdle = try values.decodeIfPresent(Bool.self, forKey: .pauseWhenIdle) ?? true
     }
 }
 
@@ -98,7 +107,7 @@ public struct Achievement: Identifiable, Codable, Equatable, Sendable {
 }
 
 public struct ProgressDocument: Codable, Equatable, Sendable {
-    public var version = 1
+    public var version = 2
     public var sessions: [ActivitySession] = []
     public var activeSessionID: UUID?
     public var tasks: [ProgressTask] = []
@@ -107,7 +116,36 @@ public struct ProgressDocument: Codable, Equatable, Sendable {
     public var legacyTotals: [LegacyTotal] = []
     public var achievements: [Achievement] = []
     public var settings = TrackingSettings()
+    // Additive fields keep version-1 data readable and retain every existing model.
+    public var outcomes: [OutcomeRecord] = []
+    public var outcomeGoals: [OutcomeGoal] = [
+        .init(category: .programming, metric: .commits, target: 5),
+        .init(category: .programming, metric: .completedTasks, target: 3),
+        .init(category: .english, metric: .lessons, target: 5),
+        .init(category: .learning, metric: .lessons, target: 3)
+    ]
+    public var gitTracking = GitTrackingConfiguration()
     public init() {}
+    private enum CodingKeys: String, CodingKey {
+        case version, sessions, activeSessionID, tasks, goals, journal, legacyTotals, achievements, settings
+        case outcomes, outcomeGoals, gitTracking
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let storedVersion = try values.decode(Int.self, forKey: .version)
+        version = storedVersion == 1 ? 2 : storedVersion
+        sessions = try values.decode([ActivitySession].self, forKey: .sessions)
+        activeSessionID = try values.decodeIfPresent(UUID.self, forKey: .activeSessionID)
+        tasks = try values.decode([ProgressTask].self, forKey: .tasks)
+        goals = try values.decode([CategoryGoal].self, forKey: .goals)
+        journal = try values.decode([JournalEntry].self, forKey: .journal)
+        legacyTotals = try values.decode([LegacyTotal].self, forKey: .legacyTotals)
+        achievements = try values.decode([Achievement].self, forKey: .achievements)
+        settings = try values.decode(TrackingSettings.self, forKey: .settings)
+        outcomes = try values.decodeIfPresent([OutcomeRecord].self, forKey: .outcomes) ?? []
+        if let savedGoals = try values.decodeIfPresent([OutcomeGoal].self, forKey: .outcomeGoals) { outcomeGoals = savedGoals }
+        gitTracking = try values.decodeIfPresent(GitTrackingConfiguration.self, forKey: .gitTracking) ?? .init()
+    }
 }
 
 public enum TimeText {

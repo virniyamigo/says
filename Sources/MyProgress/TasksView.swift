@@ -11,7 +11,7 @@ struct TasksView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
-                Text("Задачі").font(.largeTitle.bold())
+                PageHeading(title: "Задачі", subtitle: "Конкретні кроки, які перетворюють час на результат", symbol: "checklist")
                 Spacer()
                 Button("Нова задача…") { adding = true }.buttonStyle(.borderedProminent)
             }
@@ -59,6 +59,9 @@ struct TaskRow: View {
                 Text(task.title).strikethrough(task.isCompleted)
                 HStack {
                     Text(task.category.title)
+                    if task.category == .programming {
+                        Text(OutcomeAutomation.taskCode(task.id)).monospaced().textSelection(.enabled)
+                    }
                     if let due = task.dueAt {
                         Text(due, style: .date).foregroundStyle(!task.isCompleted && due < Calendar.current.startOfDay(for: Date()) ? .red : .secondary)
                     }

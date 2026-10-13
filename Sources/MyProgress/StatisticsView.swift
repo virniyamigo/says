@@ -8,7 +8,7 @@ struct StatisticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Статистика").font(.largeTitle.bold())
+                PageHeading(title: "Статистика", subtitle: "Ритм і баланс за днями та напрямами", symbol: "chart.bar.xaxis")
                 HStack {
                     Picker("Період", selection: $count) {
                         Text("7 днів").tag(7); Text("30 днів").tag(30); Text("90 днів").tag(90)
@@ -24,7 +24,7 @@ struct StatisticsView: View {
                     MetricView(title: "Активні дні (від 1 хв)", value: "\(days.filter { $0.seconds >= 60 }.count)")
                     MetricView(title: "За весь час", value: TimeText.short(tracker.stats.total(category: category)))
                 }
-                DailyChart(days: days)
+                Panel { DailyChart(days: days) }
                 Text("Розподіл за напрямами").font(.title2.bold())
                 ForEach(ActivityCategory.allCases.filter { category == nil || $0 == category }) { item in
                     let seconds = days.reduce(0.0) { result, day in
@@ -49,7 +49,7 @@ struct AchievementsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("Досягнення").font(.largeTitle.bold())
+                PageHeading(title: "Досягнення", subtitle: "Кожен завершений крок має значення", symbol: "trophy")
                 Text("Відкриті досягнення зберігаються, навіть якщо ви пізніше зміните історію.").foregroundStyle(.secondary)
                 ForEach(AchievementDefinition.all) { definition in
                     let unlocked = tracker.document.achievements.first { $0.id == definition.id }
@@ -61,7 +61,7 @@ struct AchievementsView: View {
                         }
                         Spacer()
                         if let unlocked { Text(unlocked.unlockedAt, style: .date).font(.caption) }
-                    }.padding().background(.quaternary).clipShape(RoundedRectangle(cornerRadius: 12))
+                    }.padding(22).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
                 }
             }.padding(30)
         }

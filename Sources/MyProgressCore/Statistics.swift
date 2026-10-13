@@ -65,7 +65,9 @@ public struct AchievementDefinition: Identifiable, Sendable {
         .init(id: "first-task", title: "Зроблено", detail: "Перша виконана задача"),
         .init(id: "ten-tasks", title: "Результативність", detail: "10 виконаних задач"),
         .init(id: "three-days", title: "Ритм", detail: "3 активні дні поспіль"),
-        .init(id: "first-note", title: "Саморефлексія", detail: "Перший запис у щоденнику")
+        .init(id: "first-note", title: "Саморефлексія", detail: "Перший запис у щоденнику"),
+        .init(id: "first-git", title: "Код у дії", detail: "Перший автоматично врахований Git-коміт"),
+        .init(id: "result-goal", title: "Мету досягнуто", detail: "Виконана ціль за результатами")
     ]
     public static func update(_ document: inout ProgressDocument, now: Date = Date(), calendar: Calendar = .current) {
         let stats = ProgressStatistics(document: document, calendar: calendar)
@@ -79,6 +81,9 @@ public struct AchievementDefinition: Identifiable, Sendable {
             ids.append("three-days")
         }
         if !document.journal.isEmpty { ids.append("first-note") }
+        if document.outcomes.contains(where: { $0.source == .git }) { ids.append("first-git") }
+        let outcomes = OutcomeStatistics(document: document, calendar: calendar)
+        if document.outcomeGoals.contains(where: { outcomes.progress($0, now: now) >= $0.target }) { ids.append("result-goal") }
         for id in ids where !document.achievements.contains(where: { $0.id == id }) {
             document.achievements.append(.init(id: id, unlockedAt: now))
         }
