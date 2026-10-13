@@ -1,0 +1,17 @@
+name: macOS build and core tests
+on: [push, pull_request]
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build SwiftUI app
+        run: swift build --product MyProgress
+      - name: Test data and tracking logic
+        run: swift test
+      - name: Build app bundle
+        run: ./scripts/build-macos-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyProgress-macOS
+          path: .build/MyProgress.app
